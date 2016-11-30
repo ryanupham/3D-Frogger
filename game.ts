@@ -83,6 +83,7 @@ class Entity {
     position: {x: number, y: number, z: number};
     velocity: {x: number, y: number, z: number} = {x: 0, y: 0, z: 0};
     properties: any;
+    world: World;
 
     customStep: StepFunc = null;
     customCollide: CollideFunc = null;
@@ -133,8 +134,9 @@ class Entity {
         this.position.z += vel.z;
     }
 
-    constructor(type: string, width: number, height: number, position: {x: number, y: number, z: number}) {
+    constructor(type: string, world: World, width: number, height: number, position: {x: number, y: number, z: number}) {
         this.type = type;
+        this.world = world;
         this.width = width;
         this.height = height;
         this.position = position;
@@ -169,6 +171,7 @@ class World {
     entities: Entity[] = [];
     inputs: KeyboardState = [];
     collisionHandler: CollisionHandler = new CollisionHandler();
+    scripts: {[name: string]: any} = [];
 
     pressKey(key: number) {
         this.inputs[key] = true;
@@ -210,7 +213,7 @@ class World {
 // GAME
 
 function buildFrog(): Entity {
-    let frog: Entity = new Entity("frog", 1, 1, {x: 8, y: 0, z: 0});
+    let frog: Entity = new Entity("frog", world, 1, 1, {x: 8, y: 0, z: 0});
 
     frog.customStep = function(inputs: KeyboardState) {
         if(this.properties.jumpDir != Direction.NONE) {
@@ -252,29 +255,29 @@ function buildFrog(): Entity {
         } else {
             if(this.properties.markedForDeath &&this.properties.passiveVelocity.x == 0 &&
                 this.properties.passiveVelocity.y == 0 && this.properties.passiveVelocity.z == 0)
-                console.log("dead"); // TODO: die
+                this.world.scripts.killFrog(this); // TODO: die
 
             this.move(this.properties.passiveVelocity);
 
             let jump: boolean = false;
             let curPos = this.getGridPos();
 
-            if(87 in inputs && inputs[87]) { // w
+            if(87 in inputs && inputs[87] && frog.position.y < 12) { // w
                 this.properties.jumpDir = Direction.UP;
                 this.velocity = {x: 0, y: this.properties.jumpSpeed, z: 0};
                 curPos.y++;
                 jump = true;
-            } else if(65 in inputs && inputs[65]) { // a
+            } else if(65 in inputs && inputs[65] && this.position.x > 0) { // a
                 this.properties.jumpDir = Direction.LEFT;
                 this.velocity = {x: -this.properties.jumpSpeed, y: 0, z: 0};
                 curPos.x--;
                 jump = true;
-            } else if(83 in inputs && inputs[83]) { // s
+            } else if(83 in inputs && inputs[83] && frog.position.y > 0) { // s
                 this.properties.jumpDir = Direction.DOWN;
                 this.velocity = {x: 0, y: -this.properties.jumpSpeed, z: 0};
                 curPos.y--;
                 jump = true;
-            } else if(68 in inputs && inputs[68]) { // d
+            } else if(68 in inputs && inputs[68] && this.position.x < 16) { // d
                 this.properties.jumpDir = Direction.RIGHT;
                 this.velocity = {x: this.properties.jumpSpeed, y: 0, z: 0};
                 curPos.x++;
@@ -317,9 +320,10 @@ function buildFrog(): Entity {
     let vel: {x: number, y: number, z: number} = {x: 0, y: 0, z: 0};
     let jumpDir: Direction = Direction.NONE;
     let targetSquare: {x: number, y: number} = {x: 0, y: 0};
+    let lives: number = 3;
 
     frog.properties = {passiveVelocity: vel, jumpDir: jumpDir, targetSquare: targetSquare, jumpSpeed: 0.05,
-        jumpSteps: 0, jumpProgress: 0, markedForDeath: false};
+        jumpSteps: 0, jumpProgress: 0, markedForDeath: false, lives: lives};
 
     let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x00FF00});
     let mesh: Mesh = new Mesh(new CubeGeometry(frog.width, frog.height, 1), material);
@@ -331,7 +335,7 @@ function buildFrog(): Entity {
 
 function buildLog(y: number): Entity {
     let width = 2 + Math.floor(Math.random() * 4);
-    let log = new Entity("log", width, 1, {x: -width, y: y, z: -1});
+    let log = new Entity("log", world, width, 1, {x: -width, y: y, z: -1});
     log.velocity.x = 0.025;
 
     let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x614126});
@@ -343,7 +347,7 @@ function buildLog(y: number): Entity {
 }
 
 function buildWater(x: number, y: number): Entity {
-    let water = new Entity("water", 1, 1, {x: x, y: y, z: -2});
+    let water = new Entity("water", world, 1, 1, {x: x, y: y, z: -2});
 
     let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x40a4df});
     let mesh: Mesh = new Mesh(new CubeGeometry(water.width, water.height, 1), material);
@@ -365,6 +369,22 @@ let scene: Scene;
 let world: World = new World();
 
 function buildWorld() {
+    world.scripts["killFrog"] = (frog: Entity) => {
+        frog.properties.lives--;
+
+        if(frog.properties.lives >= 0) {
+            frog.position = {x: 8, y: 0, z: 0}
+        } else {
+            console.log(this);
+            // this.scripts.gameOver();
+        }
+    };
+
+    world.scripts["gameOver"] = () => {
+        console.log("game over");
+        // TODO: game over
+    };
+
     let frog: Entity = buildFrog();
     world.entities.push(frog);
 
