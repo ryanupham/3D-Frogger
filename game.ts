@@ -84,6 +84,38 @@ class Drawable extends Component {
     }
 }
 
+class TextDrawable extends Component {
+    position: {x: number, y: number};
+    text: string;
+    color: string;
+    private div;
+
+    handle() {
+        this.div.innerHTML = this.text;
+        this.div.style.left = this.position.x;
+        this.div.style.top = this.position.y;
+        this.div.style.color = this.color;
+    }
+
+    destroy() {
+
+    }
+
+    constructor(position: {x: number, y: number}, text: string, color: string) {
+        super();
+
+        this.position = position;
+        this.text = text;
+        this.color = color;
+
+        this.div = document.createElement("div");
+        this.div.style.position = "absolute";
+        this.div.style.width = 100;
+        this.div.style.height = 100;
+        document.body.insertBefore(this.div, document.body.firstChild);
+    }
+}
+
 class Entity {
     type: string;
     solid: boolean = true;
@@ -372,6 +404,9 @@ function buildFrog(): Entity {
     let drawComp: Drawable = new Drawable(frog, renderer, scene, mesh);
     frog.components.push(drawComp);
 
+    let livesDrawable: TextDrawable = new TextDrawable({x: 5, y: 5}, "test", "#FF0000");
+    frog.components.push(livesDrawable);
+
     return frog;
 }
 
@@ -541,6 +576,24 @@ function buildRoad(x: number, y: number, width: number, height: number): Entity 
     return road;
 }
 
+function buildCameraView(camera: PerspectiveCamera, follow: Entity): Entity {
+    let view = new Entity("camera view", world, 0, 0, {x: 0, y: 0, z: 0});
+    view.solid = false;
+
+    view.properties = {camera: camera, follow: follow};
+
+    view.customStep = function(inputs: KeyboardState) {
+        let xAdj = (this.properties.follow.position.x - 8) * 0.45;
+        this.properties.camera.position.x = 8.5 + xAdj;
+        this.properties.camera.position.y = this.properties.follow.position.y - 7;
+        this.properties.camera.position.z = 6;
+
+        this.properties.camera.lookAt(new Vector3(this.properties.camera.position.x, this.properties.camera.position.y + 7, 1));
+    };
+
+    return view;
+}
+
 const WIDTH = 640;
 const HEIGHT = 480;
 
@@ -601,7 +654,11 @@ function buildWorld() {
         for(let x = -1; x <= 17; x++)
             world.entities.push(buildWater(x, y));
 
-    world.entities.push(buildRoad(0, 1, 17, 5));
+    let road = buildRoad(0, 1, 17, 5);
+    world.entities.push(road);
+
+    let cameraView: Entity = buildCameraView(camera, frog);
+    world.entities.push(cameraView);
 
     world.collisionHandler.pairs["frog"] = ["vehicle", "crocodile", "water", "turtle", "log"];
 }
