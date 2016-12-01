@@ -8,6 +8,8 @@ import Mesh = THREE.Mesh;
 import CubeGeometry = THREE.CubeGeometry;
 import MeshBasicMaterial = THREE.MeshBasicMaterial;
 import Renderer = THREE.Renderer;
+import Vector3 = THREE.Vector3;
+
 enum Direction {
     UP,
     DOWN,
@@ -42,8 +44,13 @@ interface CollideFunc {
     (e: Entity): void;
 }
 
+interface DestroyFunc {
+    (e: Entity): void;
+}
+
 abstract class Component {
     abstract handle(): void;
+    destroy(): void {}
 }
 
 class Drawable extends Component {
@@ -54,8 +61,13 @@ class Drawable extends Component {
 
     handle() {
         this.model.position.x = this.parent.position.x + this.parent.width / 2;
-        this.model.position.y = this.parent.position.y;
+        this.model.position.y = this.parent.position.y + this.parent.height / 2;
         this.model.position.z = this.parent.position.z;
+    }
+
+    destroy() {
+        if(this.model)
+            this.scene.remove(this.model);
     }
 
     constructor(parent: Entity, renderer: Renderer, scene: Scene, model?: Mesh) {
@@ -74,7 +86,6 @@ class Drawable extends Component {
 
 class Entity {
     type: string;
-    visible: boolean = true;
     solid: boolean = true;
     enabled: boolean = true;
     components: Component[] = [];
@@ -84,9 +95,11 @@ class Entity {
     velocity: {x: number, y: number, z: number} = {x: 0, y: 0, z: 0};
     properties: any;
     world: World;
+    markedForDeletion: boolean = false;
 
     customStep: StepFunc = null;
     customCollide: CollideFunc = null;
+    onDestroy: DestroyFunc = null;
 
     step(inputs: KeyboardState) {
         for(let e of this.components)
@@ -132,6 +145,13 @@ class Entity {
         this.position.x += vel.x;
         this.position.y += vel.y;
         this.position.z += vel.z;
+    }
+
+    destroy() {
+        this.markedForDeletion = true;
+
+        for(let c of this.components)
+            c.destroy();
     }
 
     constructor(type: string, world: World, width: number, height: number, position: {x: number, y: number, z: number}) {
@@ -181,10 +201,18 @@ class World {
         this.inputs[key] = false;
     }
 
+    handleDeletions() {
+        for(let i = 0; i < this.entities.length; i++)
+            if(this.entities[i].markedForDeletion)
+                this.entities.splice(i--, 1);
+    }
+
     step() {
         for(let e of this.entities)
             if(e.enabled)
                 e.step(this.inputs);
+
+        this.handleDeletions();
     }
 
     handleComponents() {
@@ -192,18 +220,21 @@ class World {
             for(let c of e.components)
                 if(!(c instanceof Drawable))
                     c.handle();
+
+        this.handleDeletions();
     }
 
     handleCollisions() {
         this.collisionHandler.handleCollisions(this.entities);
+
+        this.handleDeletions();
     }
 
     draw() {
         for(let e of this.entities)
-            if(e.visible)
-                for(let c of e.components)
-                    if(c instanceof Drawable)
-                        c.handle();
+            for(let c of e.components)
+                if(c instanceof Drawable)
+                    c.handle();
 
         renderer.render(scene, camera);
     }
@@ -253,9 +284,11 @@ function buildFrog(): Entity {
                 this.position.z = 0;
             }
         } else {
-            if(this.properties.markedForDeath &&this.properties.passiveVelocity.x == 0 &&
-                this.properties.passiveVelocity.y == 0 && this.properties.passiveVelocity.z == 0)
-                this.world.scripts.killFrog(this); // TODO: die
+            if(this.properties.markedForDeath && this.properties.passiveVelocity.x == 0 &&
+                this.properties.passiveVelocity.y == 0 && this.properties.passiveVelocity.z == 0) {
+                this.world.scripts.killFrog(this);
+                return;
+            }
 
             this.move(this.properties.passiveVelocity);
 
@@ -296,24 +329,32 @@ function buildFrog(): Entity {
     };
 
     frog.customCollide = function(e: Entity) {
-        if(this.properties.jumpDir == Direction.NONE) {
-            switch(e.type) {
-                // enemies/death zones
-                case "vehicle":
-                case "crocodile":
-                    // TODO: die
-                    break;
+        switch(e.type) {
+            // enemies/death zones
+            case "vehicle":
+            case "crocodile":
+                this.world.scripts.killFrog(this);
+                break;
 
-                case "water":
+            case "water":
+                if(this.properties.jumpDir == Direction.NONE)
                     this.properties.markedForDeath = true;
-                    break;
 
-                // platforms
-                case "turtle":
-                case "log":
+                break;
+
+            // platforms
+            case "log":
+                if(this.properties.jumpDir == Direction.NONE)
                     this.properties.passiveVelocity = e.velocity;
-                    break;
-            }
+
+                break;
+            case "turtle":
+                if(this.properties.jumpDir == Direction.NONE) {
+                    this.properties.passiveVelocity = e.velocity;
+
+                    if (e.properties.state === "submerged" && e.velocity.z == 0)
+                        this.world.scripts.killFrog(this);
+                }
         }
     };
 
@@ -322,28 +363,160 @@ function buildFrog(): Entity {
     let targetSquare: {x: number, y: number} = {x: 0, y: 0};
     let lives: number = 3;
 
-    frog.properties = {passiveVelocity: vel, jumpDir: jumpDir, targetSquare: targetSquare, jumpSpeed: 0.05,
+    frog.properties = {passiveVelocity: vel, jumpDir: jumpDir, targetSquare: targetSquare, jumpSpeed: 0.07,
         jumpSteps: 0, jumpProgress: 0, markedForDeath: false, lives: lives};
 
     let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x00FF00});
     let mesh: Mesh = new Mesh(new CubeGeometry(frog.width, frog.height, 1), material);
+    mesh.scale.set(0.9, 0.9, 1);
     let drawComp: Drawable = new Drawable(frog, renderer, scene, mesh);
     frog.components.push(drawComp);
 
     return frog;
 }
 
-function buildLog(y: number): Entity {
+function buildLogBuilder(y: number, speed: number, direction: Direction): Entity {
+    let builder = new Entity("log builder", world, 0, 0, {x: 0, y: 0, z: 0});
+    builder.solid = false;
+
+    builder.properties = {y: y, stepsToNext: Math.round(Math.random() * 30 * 5)};
+
+    builder.customStep = function(inputs: KeyboardState) {
+        if(--this.properties.stepsToNext <= 0) {
+            let log = buildLog(this.properties.y, speed, direction);
+            log.world.entities.push(log);
+
+            let stepsPerBlock = 1 / Math.abs(log.velocity.x);
+            this.properties.stepsToNext = Math.round(stepsPerBlock * (log.width + 1 + Math.floor(Math.random() * 6)));
+        }
+    };
+
+    return builder;
+}
+
+function buildLog(y: number, speed: number, direction: Direction): Entity {
     let width = 2 + Math.floor(Math.random() * 4);
-    let log = new Entity("log", world, width, 1, {x: -width, y: y, z: -1});
-    log.velocity.x = 0.025;
+    let log = new Entity("log", world, width, 1, {x: (direction === Direction.RIGHT) ? -width : 17, y: y, z: -1});
+    log.velocity.x = (direction === Direction.RIGHT) ? speed : -speed;
+
+    log.customStep = function(inputs: KeyboardState) {
+        this.move();
+
+        if((this.velocity.x > 0 && this.position.x > 18) || (this.velocity.x < 0 && this.position.x < -1 - this.width))
+            this.destroy();
+    };
 
     let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x614126});
     let mesh: Mesh = new Mesh(new CubeGeometry(log.width, log.height, 1), material);
+    mesh.scale.set(1, 0.9, 1);
     let drawComp: Drawable = new Drawable(log, renderer, scene, mesh);
     log.components.push(drawComp);
 
     return log;
+}
+
+function buildTurtleBuilder(y: number, speed: number, direction: Direction) : Entity {
+    let builder = new Entity("turtle builder", world, 0, 0, {x: 0, y: 0, z: 0});
+    builder.solid = false;
+
+    builder.properties = {y: y, stepsToNext: Math.round(Math.random() * 30 * 5)};
+
+    builder.customStep = function(inputs: KeyboardState) {
+        if(--this.properties.stepsToNext <= 0) {
+            let groupSize = 2 + Math.round(Math.random());
+            let sinkPeriod = 30 * (1 + Math.floor(Math.random() * 10));
+
+            for(let i = 0; i < groupSize; i++) {
+                var turtle = buildTurtle(this.properties.y, speed, direction, sinkPeriod);
+                turtle.position.x += (direction === Direction.RIGHT) ? -i : i;
+                turtle.world.entities.push(turtle);
+            }
+
+            let stepsPerBlock = 1 / Math.abs(turtle.velocity.x);
+            this.properties.stepsToNext = Math.round(stepsPerBlock * (groupSize + 1 + Math.floor(Math.random() * 6)));
+        }
+    };
+
+    return builder;
+}
+
+function buildTurtle(y: number, speed: number, direction: Direction, sinkPeriod: number): Entity {
+    let turtle = new Entity("turtle", world, 1, 1, {x: (direction === Direction.RIGHT) ? -1 : 17, y: y, z: -1});
+    turtle.velocity.x = (direction === Direction.RIGHT) ? speed : -speed;
+
+    turtle.properties = {state: "floating", sinkPeriod: sinkPeriod, stepsToSink: sinkPeriod};
+
+    turtle.customStep = function(inputs: KeyboardState) {
+        this.move();
+
+        if(--this.properties.stepsToSink == 0)
+            this.velocity.z = (this.properties.state === "floating") ? -speed : speed;
+
+        if(this.properties.stepsToSink < 0) {
+            if(this.properties.state === "floating" && this.position.z < -2.01) {
+                this.position.z = -2.01;
+                this.velocity.z = 0;
+                this.properties.state = "submerged";
+
+                this.properties.stepsToSink = sinkPeriod;
+            } else if(this.properties.state === "submerged" && this.position.z > -1) {
+                this.position.z = -1;
+                this.velocity.z = 0;
+                this.properties.state = "floating";
+
+                this.properties.stepsToSink = sinkPeriod;
+            }
+        }
+
+        if((this.velocity.x > 0 && this.position.x > 18) || (this.velocity.x < 0 && this.position.x < -2))
+            this.destroy();
+    };
+
+    let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x006400});
+    let mesh: Mesh = new Mesh(new CubeGeometry(turtle.width, turtle.height, 1), material);
+    mesh.scale.set(0.9, 0.9, 1);
+    let drawComp: Drawable = new Drawable(turtle, renderer, scene, mesh);
+    turtle.components.push(drawComp);
+
+    return turtle;
+}
+
+function buildVehicleBuilder(y: number, speed: number, direction: Direction): Entity {
+    let builder = new Entity("vehicle builder", world, 0, 0, {x: 0, y: 0, z: 0});
+    builder.solid = false;
+
+    builder.properties = {y: y, stepsToNext: Math.round(Math.random() * 30 * 5)};
+
+    builder.customStep = function(inputs: KeyboardState) {
+        if(--this.properties.stepsToNext <= 0) {
+            var vehicle = buildVehicle(this.properties.y, speed, direction);
+            vehicle.world.entities.push(vehicle);
+
+            let stepsPerBlock = 1 / Math.abs(vehicle.velocity.x);
+            this.properties.stepsToNext = Math.round(stepsPerBlock * (3 + Math.floor(Math.random() * 6)));
+        }
+    };
+
+    return builder;
+}
+
+function buildVehicle(y: number, speed: number, direction: Direction): Entity {
+    let vehicle = new Entity("vehicle", world, 1, 1, {x: (direction === Direction.RIGHT) ? -1 : 17, y: y, z: 0});
+    vehicle.velocity.x = (direction === Direction.RIGHT) ? speed : -speed;
+
+    vehicle.customStep = function(inputs: KeyboardState) {
+        this.move();
+
+        if((this.velocity.x > 0 && this.position.x > 18) || (this.velocity.x < 0 && this.position.x < -2))
+            this.destroy();
+    };
+
+    let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0xb20000});
+    let mesh: Mesh = new Mesh(new CubeGeometry(vehicle.width, vehicle.height, 1), material);
+    let drawComp: Drawable = new Drawable(vehicle, renderer, scene, mesh);
+    vehicle.components.push(drawComp);
+
+    return vehicle;
 }
 
 function buildWater(x: number, y: number): Entity {
@@ -355,6 +528,17 @@ function buildWater(x: number, y: number): Entity {
     water.components.push(drawComp);
 
     return water;
+}
+
+function buildRoad(x: number, y: number, width: number, height: number): Entity {
+    let road = new Entity("road", world, width, height, {x: x, y: y, z: -1});
+
+    let material: MeshBasicMaterial = new MeshBasicMaterial({color: 0x939393});
+    let mesh: Mesh = new Mesh(new CubeGeometry(road.width, road.height, 1), material);
+    let drawComp: Drawable = new Drawable(road, renderer, scene, mesh);
+    road.components.push(drawComp);
+
+    return road;
 }
 
 const WIDTH = 640;
@@ -369,31 +553,55 @@ let scene: Scene;
 let world: World = new World();
 
 function buildWorld() {
-    world.scripts["killFrog"] = (frog: Entity) => {
-        frog.properties.lives--;
-
-        if(frog.properties.lives >= 0) {
-            frog.position = {x: 8, y: 0, z: 0}
-        } else {
-            console.log(this);
-            // this.scripts.gameOver();
-        }
-    };
-
-    world.scripts["gameOver"] = () => {
+    world.scripts["gameOver"] = (self: World) => {
         console.log("game over");
         // TODO: game over
+    };
+
+    world.scripts["killFrog"] = (frog: Entity) => {
+        frog.properties.lives--;
+        frog.properties.markedForDeath = false;
+        frog.properties.jumpDir = Direction.NONE;
+
+        if(frog.properties.lives >= 0) {
+            frog.position = {x: 8, y: 0, z: 0};
+            frog.properties.passiveVelocity = {x: 0, y: 0, z: 0};
+        } else {
+            frog.world.scripts.gameOver(frog.world);
+        }
     };
 
     let frog: Entity = buildFrog();
     world.entities.push(frog);
 
-    let log: Entity = buildLog(6);
-    world.entities.push(log);
+    let logBuilder: Entity = buildLogBuilder(8, 0.02, Direction.RIGHT);
+    world.entities.push(logBuilder);
+    logBuilder = buildLogBuilder(9, 0.04, Direction.RIGHT);
+    world.entities.push(logBuilder);
+    logBuilder = buildLogBuilder(11, 0.03, Direction.RIGHT);
+    world.entities.push(logBuilder);
 
-    for(let y = 6; y <= 10; y++)
+    let turtleBuilder: Entity = buildTurtleBuilder(7, 0.025, Direction.LEFT);
+    world.entities.push(turtleBuilder);
+    turtleBuilder = buildTurtleBuilder(10, 0.025, Direction.LEFT);
+    world.entities.push(turtleBuilder);
+
+    let vehicleBuilder: Entity = buildVehicleBuilder(1, 0.015, Direction.LEFT);
+    world.entities.push(vehicleBuilder);
+    vehicleBuilder = buildVehicleBuilder(2, 0.025, Direction.RIGHT);
+    world.entities.push(vehicleBuilder);
+    vehicleBuilder = buildVehicleBuilder(3, 0.03, Direction.LEFT);
+    world.entities.push(vehicleBuilder);
+    vehicleBuilder = buildVehicleBuilder(4, 0.025, Direction.RIGHT);
+    world.entities.push(vehicleBuilder);
+    vehicleBuilder = buildVehicleBuilder(5, 0.025, Direction.LEFT);
+    world.entities.push(vehicleBuilder);
+
+    for(let y = 7; y <= 11; y++)
         for(let x = -1; x <= 17; x++)
             world.entities.push(buildWater(x, y));
+
+    world.entities.push(buildRoad(0, 1, 17, 5));
 
     world.collisionHandler.pairs["frog"] = ["vehicle", "crocodile", "water", "turtle", "log"];
 }
@@ -403,7 +611,7 @@ function setup() {
     scene = new Scene();
     camera = new PerspectiveCamera(FOV_ANGLE, WIDTH / HEIGHT, 0.1, 5000);
     camera.position.x = 8.5;
-    camera.position.y = 6;
+    camera.position.y = 6.5;
     camera.position.z = 15;
 
     renderer.setSize(WIDTH, HEIGHT);
